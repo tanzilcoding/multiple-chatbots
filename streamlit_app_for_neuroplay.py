@@ -1,5 +1,7 @@
 import os
+import sys
 import time
+import traceback
 import openai
 import pinecone
 import streamlit as st
@@ -9,6 +11,13 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    AIMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
+
 
 try:
     import environment_variables
@@ -81,6 +90,8 @@ try:
     counter_placeholder = st.sidebar.empty()
     # counter_placeholder.write(f"Total cost of this conversation: ${st.session_state['total_cost']:.5f}")
     clear_button = st.sidebar.button("Clear Conversation", key="clear")
+    st.sidebar.text_area("Additional Instructions:",
+                         key='additional_instructions', height=100)
 
     # Map model names to OpenAI model IDs
     if model_name == "GPT-3.5":
@@ -105,28 +116,67 @@ try:
         st.session_state['model_name'] = []
         # counter_placeholder.write(f"Total cost of this conversation: ${st.session_state['total_cost']:.5f}")
 
-    # generate a response
+    def get_prompt():
+        initital_text = """
+            Answer the question based on the context below. If the question cannot be answered using the information provided, answer with "I am sorry. I cannot answer your question based on the provided context.". Do not try to make up an answer.
+        """
+        additional_instructions = st.session_state.additional_instructions
+        additional_instructions = additional_instructions.strip()
+        if additional_instructions != "":
+            if not additional_instructions.endswith("."):
+                additional_instructions = additional_instructions + "."
+            initital_text = initital_text + additional_instructions
+        initital_text = initital_text.strip()
 
-    def generate_response(prompt):
-        query = prompt
+        # Define the system message template
+        system_template = initital_text + """
+        
+        #####Start of Context#####
+        {context}
+        #####End of Context#####
+        """
+
+        user_template = "Question:```{question}```"
+
+        # Create the chat prompt templates
+        messages = [
+            SystemMessagePromptTemplate.from_template(system_template),
+            HumanMessagePromptTemplate.from_template(user_template),
+        ]
+
+        prompt = ChatPromptTemplate.from_messages(messages)
+
+        return prompt
+
+    # generate a response
+    def generate_response(query):
+        query = query.strip()
+
         st.session_state['messages'].append(
-            {"role": "user", "content": prompt})
+            {"role": "user", "content": query})
 
         ######################################################
         memory = ConversationSummaryBufferMemory(
-            llm=llm, 
-            memory_key="chat_history", 
+            llm=llm,
+            memory_key="chat_history",
             return_messages=True,
             max_token_limit=16384,
         )
 
+        prompt = get_prompt()
+
         chain = ConversationalRetrievalChain.from_llm(
             llm,
-            retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
+            retriever=vectorstore.as_retriever(),
+            combine_docs_chain_kwargs={"prompt": prompt},
             memory=memory,
+            return_source_documents=False,
+            verbose=False,
         )
-        response = chain.run({'question': query})
-        response = response.strip()
+
+        result = chain({'question': query})
+        raw_answer = result['answer']
+        response = raw_answer.strip()
         ######################################################
         # response = ""
         st.session_state['messages'].append(
@@ -167,4 +217,10 @@ except Exception as e:
         error_message = e.message
     else:
         error_message = e
-    st.error('ERROR MESSAGE: {}'.format(error_message))
+    st.error('ERROR MESSAGE: {}'.format(error_message), icon="🚨")
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+    st.error(f'Error Type: {exc_type}', icon="🚨")
+    st.error(f'File Name: {fname}', icon="🚨")
+    st.error(f'Line Number: {exc_tb.tb_lineno}', icon="🚨")
+    # print(traceback.format_exc())
