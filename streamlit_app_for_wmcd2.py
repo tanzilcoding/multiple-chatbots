@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import openai
 import pinecone
@@ -9,6 +10,7 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+import traceback
 
 try:
     import environment_variables
@@ -113,26 +115,13 @@ try:
             {"role": "user", "content": prompt})
 
         ######################################################
-        memory = ConversationSummaryBufferMemory(
-            llm=llm, 
-            memory_key="chat_history", 
-            return_messages=True,
-            max_token_limit=16384,
+        docs_and_scores = vectorstore.similarity_search_with_score(
+            query,
         )
-
-        chain = ConversationalRetrievalChain.from_llm(
-            llm,
-            retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
-            memory=memory,
-        )
-        response = chain.run({'question': query})
-        response = response.strip()
+        print(docs_and_scores)
         ######################################################
-        # response = ""
-        st.session_state['messages'].append(
-            {"role": "assistant", "content": response})
 
-        return response
+        return docs_and_scores
 
     # container for chat history
     response_container = st.container()
@@ -156,7 +145,26 @@ try:
             for i in range(len(st.session_state['generated'])):
                 message(st.session_state["past"][i],
                         is_user=True, key=str(i) + '_user')
-                message(st.session_state["generated"][i], key=str(i))
+                # message(st.session_state["generated"][i], key=str(i))
+                docs_and_scores = st.session_state["generated"][i]
+
+                counter = 0
+                for doc in docs_and_scores:
+                    counter = counter + 1
+                    document = list(doc)[0]
+                    metadata = document.metadata
+                    source = metadata['source']
+                    score = list(doc)[1]
+                    score = float(score)
+                    score = score * 100
+                    score = str(round(score, 2))
+
+                    st.markdown(
+                        f"""<span style="word-wrap:break-word;"><strong>Document {counter}:</strong> <span style="color: #c1121f;">{source}</span></span>""", unsafe_allow_html=True)
+                    st.markdown(
+                        f"""<span style="word-wrap:break-word;"><strong>Similarity score:</strong> {score}%""", unsafe_allow_html=True)
+
+
 except Exception as e:
     error_message = ''
     # st.text('Hello World')
@@ -168,3 +176,10 @@ except Exception as e:
     else:
         error_message = e
     st.error('ERROR MESSAGE: {}'.format(error_message))
+    st.error('ERROR MESSAGE: {}'.format(error_message), icon="🚨")
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+    st.error(f'Error Type: {exc_type}', icon="🚨")
+    st.error(f'File Name: {fname}', icon="🚨")
+    st.error(f'Line Number: {exc_tb.tb_lineno}', icon="🚨")
+    st.error(traceback.format_exc())
